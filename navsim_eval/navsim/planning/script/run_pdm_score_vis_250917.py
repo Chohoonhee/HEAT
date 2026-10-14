@@ -1,0 +1,238 @@
+from typing import Any, Dict, List, Union, Tuple
+from pathlib import Path
+from dataclasses import asdict
+from datetime import datetime
+import traceback
+import logging
+import lzma
+import pickle
+import os
+import uuid
+
+import hydra
+from hydra.utils import instantiate
+from omegaconf import DictConfig
+import pandas as pd
+
+from nuplan.planning.script.builders.logging_builder import build_logger
+from nuplan.planning.utils.multithreading.worker_utils import worker_map
+
+from navsim.agents.abstract_agent import AbstractAgent
+from navsim.common.dataloader import SceneLoader, SceneFilter, MetricCacheLoader
+from navsim.common.dataclasses import SensorConfig
+from navsim.evaluate.pdm_score import pdm_score
+from navsim.planning.script.builders.worker_pool_builder import build_worker
+from navsim.planning.simulation.planner.pdm_planner.simulation.pdm_simulator import PDMSimulator
+from navsim.planning.simulation.planner.pdm_planner.scoring.pdm_scorer import PDMScorer
+from navsim.planning.metric_caching.metric_cache import MetricCache
+
+# For visualization ------------------------------- ###
+from navsim.visualization.config import BEV_PLOT_CONFIG, TRAJECTORY_CONFIG, CAMERAS_PLOT_CONFIG
+from navsim.visualization.bev import add_configured_bev_on_ax, add_trajectory_to_bev_ax
+from navsim.visualization.plots import plot_bev_with_agent, configure_bev_ax, configure_ax
+import matplotlib.pyplot as plt
+### ----------------------------------------------- ###
+
+logger = logging.getLogger(__name__)
+
+CONFIG_PATH = "config/pdm_scoring"
+CONFIG_NAME = "default_run_pdm_score"
+
+
+def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[Dict[str, Any]]:
+    """
+    Helper function to run PDMS evaluation in.
+    :param args: input arguments
+    """
+    node_id = int(os.environ.get("NODE_RANK", 0))
+    thread_id = str(uuid.uuid4())
+    logger.info(f"Starting worker in thread_id={thread_id}, node_id={node_id}")
+    # import pdb; pdb.set_trace()     # NOTE: 기원추가
+    log_names = [a["log_file"] for a in args]
+    tokens = [t for a in args for t in a["tokens"]]
+    cfg: DictConfig = args[0]["cfg"]
+
+    simulator: PDMSimulator = instantiate(cfg.simulator)
+    scorer: PDMScorer = instantiate(cfg.scorer)
+    assert (
+        simulator.proposal_sampling == scorer.proposal_sampling
+    ), "Simulator and scorer proposal sampling has to be identical"
+    
+    # breakpoint()
+    # breakpoint()
+    agent: AbstractAgent = instantiate(cfg.agent)
+    # breakpoint()
+    if cfg.agent._target_ == 'navsim.agents.law.transfuser_agent.TransfuserAgent':
+        pass
+    elif cfg.agent._target_ == 'navsim.agents.bevplanner.transfuser_agent.TransfuserAgent':
+        pass
+    else:
+        agent.initialize()
+    # breakpoint()
+    
+    metric_cache_loader = MetricCacheLoader(Path(cfg.metric_cache_path))
+    scene_filter: SceneFilter = instantiate(cfg.train_test_split.scene_filter)
+    scene_filter.log_names = log_names
+    scene_filter.tokens = tokens
+    scene_loader = SceneLoader(
+        sensor_blobs_path=Path(cfg.sensor_blobs_path),
+        data_path=Path(cfg.navsim_log_path),
+        scene_filter=scene_filter,
+        sensor_config=agent.get_sensor_config(),
+    )
+
+    tokens_to_evaluate = list(set(scene_loader.tokens) & set(metric_cache_loader.tokens))
+    pdm_results: List[Dict[str, Any]] = []
+    
+    # breakpoint()
+    
+    for idx, (token) in enumerate(tokens_to_evaluate):
+        logger.info(
+            f"Processing scenario {idx + 1} / {len(tokens_to_evaluate)} in thread_id={thread_id}, node_id={node_id}"
+        )
+        score_row: Dict[str, Any] = {"token": token, "valid": True}
+        try:
+            metric_cache_path = metric_cache_loader.metric_cache_paths[token]
+            with lzma.open(metric_cache_path, "rb") as f:
+                metric_cache: MetricCache = pickle.load(f)
+            # breakpoint()    # metric_cache.trajectory
+
+
+            
+            agent_input = scene_loader.get_agent_input_from_token(token)
+            
+            if agent.requires_scene:
+                scene = scene_loader.get_scene_from_token(token)
+                if cfg.agent._target_ == 'navsim.agents.law.transfuser_agent.TransfuserAgent':
+                    trajectory = agent.compute_trajectory_law_gw(agent_input, scene, cfg)
+                elif cfg.agent._target_ == 'navsim.agents.bevplanner.transfuser_agent.TransfuserAgent':
+                    trajectory = agent.compute_trajectory_bevplanner_gw(agent_input, scene, cfg)
+                else:
+                    trajectory = agent.compute_trajectory(agent_input, scene)
+            else:
+                if cfg.agent._target_ == 'navsim.agents.law.transfuser_agent.TransfuserAgent':
+                    scene = scene_loader.get_scene_from_token(token)
+                    trajectory = agent.compute_trajectory_law_gw(agent_input, scene, cfg)
+                elif cfg.agent._target_ == 'navsim.agents.bevplanner.transfuser_agent.TransfuserAgent':
+                    scene = scene_loader.get_scene_from_token(token)
+                    trajectory = agent.compute_trajectory_bevplanner_gw(agent_input, scene, cfg)
+                else:
+                    trajectory = agent.compute_trajectory(agent_input)
+                    
+            # NOTE: 기원추가 visualization ---------------------------------- ###
+            if idx < 200:
+                
+                human_trajectory = scene.get_future_trajectory()
+                agent_trajectory = trajectory
+
+                frame_idx = scene.scene_metadata.num_history_frames - 1
+                fig, ax = plt.subplots(1, 1, figsize=BEV_PLOT_CONFIG["figure_size"])
+                add_configured_bev_on_ax(ax, scene.map_api, scene.frames[frame_idx])
+                add_trajectory_to_bev_ax(ax, human_trajectory, TRAJECTORY_CONFIG["human"])
+                add_trajectory_to_bev_ax(ax, agent_trajectory, TRAJECTORY_CONFIG["agent"])
+                configure_bev_ax(ax)
+                configure_ax(ax)
+                
+                # fig, ax = plot_bev_with_agent(scene, agent)
+
+                # 저장 경로 설정
+                save_dir = os.path.join(os.environ.get("NAVSIM_EXP_ROOT", "exp"), "bev_vis")
+                os.makedirs(save_dir, exist_ok=True)  # 경로 없으면 생성
+
+                save_path = os.path.join(save_dir, f"bev_scene_{idx}.png")
+                fig.savefig(save_path, dpi=200, bbox_inches="tight")
+            ### ----------------------------------------------------------- ###
+            
+            # import pdb; pdb.set_trace()     # NOTE: 기원추가
+            pdm_result = pdm_score(
+                metric_cache=metric_cache,
+                model_trajectory=trajectory,
+                future_sampling=simulator.proposal_sampling,
+                simulator=simulator,
+                scorer=scorer,
+            )
+            score_row.update(asdict(pdm_result))
+        except Exception as e:
+            logger.warning(f"----------- Agent failed for token {token}:")
+            traceback.print_exc()
+            score_row["valid"] = False
+
+        pdm_results.append(score_row)
+    return pdm_results
+
+
+@hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
+def main(cfg: DictConfig) -> None:
+    """
+    Main entrypoint for running PDMS evaluation.
+    :param cfg: omegaconf dictionary
+    """
+
+    build_logger(cfg)
+    worker = build_worker(cfg)
+
+    # Extract scenes based on scene-loader to know which tokens to distribute across workers
+    # TODO: infer the tokens per log from metadata, to not have to load metric cache and scenes here
+    # import pdb; pdb.set_trace()
+
+    scene_loader = SceneLoader(
+        sensor_blobs_path=None,
+        data_path=Path(cfg.navsim_log_path),
+        scene_filter=instantiate(cfg.train_test_split.scene_filter),
+        sensor_config=SensorConfig.build_no_sensors(),
+    )
+    # import pdb; pdb.set_trace()
+
+    metric_cache_loader = MetricCacheLoader(Path(cfg.metric_cache_path))
+    # import pdb; pdb.set_trace()
+
+    tokens_to_evaluate = list(set(scene_loader.tokens) & set(metric_cache_loader.tokens))
+    num_missing_metric_cache_tokens = len(set(scene_loader.tokens) - set(metric_cache_loader.tokens))
+    num_unused_metric_cache_tokens = len(set(metric_cache_loader.tokens) - set(scene_loader.tokens))
+    # import pdb; pdb.set_trace()
+
+    if num_missing_metric_cache_tokens > 0:
+        logger.warning(f"Missing metric cache for {num_missing_metric_cache_tokens} tokens. Skipping these tokens.")
+    if num_unused_metric_cache_tokens > 0:
+        logger.warning(f"Unused metric cache for {num_unused_metric_cache_tokens} tokens. Skipping these tokens.")
+    logger.info("Starting pdm scoring of %s scenarios...", str(len(tokens_to_evaluate)))
+    # import pdb; pdb.set_trace()
+
+    data_points = [
+        {
+            "cfg": cfg,
+            "log_file": log_file,
+            "tokens": tokens_list,
+        }
+        for log_file, tokens_list in scene_loader.get_tokens_list_per_log().items()
+    ]
+    # import pdb; pdb.set_trace()
+
+    score_rows: List[Tuple[Dict[str, Any], int, int]] = worker_map(worker, run_pdm_score, data_points)
+    
+
+    pdm_score_df = pd.DataFrame(score_rows)
+    num_sucessful_scenarios = pdm_score_df["valid"].sum()
+    num_failed_scenarios = len(pdm_score_df) - num_sucessful_scenarios
+    average_row = pdm_score_df.drop(columns=["token", "valid"]).mean(skipna=True)
+    average_row["token"] = "average"
+    average_row["valid"] = pdm_score_df["valid"].all()
+    pdm_score_df.loc[len(pdm_score_df)] = average_row
+
+    save_path = Path(cfg.output_dir)
+    timestamp = datetime.now().strftime("%Y.%m.%d.%H.%M.%S")
+    pdm_score_df.to_csv(save_path / f"{timestamp}.csv")
+
+    logger.info(
+        f"""
+        Finished running evaluation.
+            Number of successful scenarios: {num_sucessful_scenarios}.
+            Number of failed scenarios: {num_failed_scenarios}.
+            Final average score of valid results: {pdm_score_df['score'].mean()}.
+            Results are stored in: {save_path / f"{timestamp}.csv"}.
+        """
+    )
+
+
+if __name__ == "__main__":
+    main()

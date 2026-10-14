@@ -1,0 +1,67 @@
+diff --git a/nuplan/common/geometry/compute.py b/nuplan/common/geometry/compute.py
+index 1c2c410..dfbced9 100644
+--- a/nuplan/common/geometry/compute.py
++++ b/nuplan/common/geometry/compute.py
+@@ -1,3 +1,5 @@
++from __future__ import annotations  # 기원 추가
++
+ from typing import List, Union
+ 
+ import numpy as np
+diff --git a/nuplan/planning/utils/multithreading/worker_parallel.py b/nuplan/planning/utils/multithreading/worker_parallel.py
+index a970285..79df8ac 100644
+--- a/nuplan/planning/utils/multithreading/worker_parallel.py
++++ b/nuplan/planning/utils/multithreading/worker_parallel.py
+@@ -1,3 +1,5 @@
++from __future__ import annotations
++
+ import concurrent
+ import concurrent.futures
+ import logging
+diff --git a/nuplan/planning/utils/multithreading/worker_pool.py b/nuplan/planning/utils/multithreading/worker_pool.py
+index 8584e7b..7b2fcbe 100644
+--- a/nuplan/planning/utils/multithreading/worker_pool.py
++++ b/nuplan/planning/utils/multithreading/worker_pool.py
+@@ -1,3 +1,5 @@
++from __future__ import annotations      # 기원 추가
++
+ import abc
+ import logging
+ from concurrent.futures import Future
+diff --git a/nuplan/planning/utils/multithreading/worker_ray.py b/nuplan/planning/utils/multithreading/worker_ray.py
+index 8ccface..3798db2 100644
+--- a/nuplan/planning/utils/multithreading/worker_ray.py
++++ b/nuplan/planning/utils/multithreading/worker_ray.py
+@@ -1,3 +1,4 @@
++from __future__ import annotations
+ import logging
+ import os
+ from concurrent.futures import Future
+diff --git a/nuplan/planning/utils/multithreading/worker_sequential.py b/nuplan/planning/utils/multithreading/worker_sequential.py
+index bc14523..bbf5541 100644
+--- a/nuplan/planning/utils/multithreading/worker_sequential.py
++++ b/nuplan/planning/utils/multithreading/worker_sequential.py
+@@ -1,3 +1,4 @@
++from __future__ import annotations
+ import logging
+ from concurrent.futures import Future
+ from typing import Any, Iterable, List
+diff --git a/setup.py b/setup.py
+index f6ddafc..1b2d233 100644
+--- a/setup.py
++++ b/setup.py
+@@ -14,12 +14,12 @@ setuptools.setup(
+     author_email='nuscenes@motional.com',
+     description='The official devkit of the nuPlan dataset (www.nuPlan.org).',
+     url='https://github.com/motional/nuplan-devkit',
+-    python_requires='>=3.9',
++    python_requires='>=3.8',
+     packages=setuptools.find_packages(script_folder, exclude=['*test', 'bazel-nuplan_devkit*', 'bazel-nuplan-devkit*']),
+     package_data={'': ['*.json']},
+     include_package_data=True,
+     classifiers=[
+-        'Programming Language :: Python :: 3.9',
++        'Programming Language :: Python :: 3.8',
+         'Operating System :: OS Independent',
+         'License :: Free for non-commercial use',
+     ],

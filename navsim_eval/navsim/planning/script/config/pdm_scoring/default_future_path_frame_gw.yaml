@@ -1,0 +1,2 @@
+# ego의 num_future_frames. 
+num_future_frames: 8  # 기본값을 1.0으로 설정   # train일때는 8, val/test일때는 6으로 설정

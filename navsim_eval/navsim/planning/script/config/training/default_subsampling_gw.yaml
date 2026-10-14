@@ -1,0 +1,2 @@
+# sampling 할 데이터 퍼센트.
+sampling_percent: 1.0  # 기본값을 1.0으로 설정

@@ -1,0 +1,30 @@
+# data / outputs (machine-local; see docs/DATA.md for layout)
+data/*
+!data/README.md
+ckpts/*
+!ckpts/README.md
+work_dirs/
+navsim_eval/exp/
+
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# editor / misc
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# large intermediates
+*.pth
+*.tar
+*.zip
+tf_logs/
+
+# regenerated stage-2 artifacts (Track B outputs)
+clustering_txt/generated/
+proto/18_cluster/
